@@ -1,16 +1,17 @@
 // Offer Comparator - the main "conductor" function.
-// Combines tax, ESOP valuation, ESOP tax, cost-of-living, and live stock price
-// into one final, comparable "effective annual value" for a job offer.
+// Combines tax, ESOP valuation (with company-risk-adjusted haircut), ESOP tax,
+// cost-of-living, and live stock price into one final comparable offer value.
 
 import { calculateTakeHome } from './taxCalculator';
 import { calculateEsopValue } from './esopValuation';
 import { calculateEsopTax } from './esopTax';
 import { adjustForCostOfLiving } from './costOfLiving';
 import { fetchStockPrice } from './stockPriceFetcher';
+import { getCompanyRiskProfile } from './companyRiskProfile';
 
 interface OfferInput {
   companyName: string;
-  tickerSymbol: string;    // e.g. "TCS.BSE" - optional if no ESOPs
+  tickerSymbol: string;
   city: string;
   baseSalary: number;
   joiningBonus: number;
@@ -28,15 +29,14 @@ export async function compareOffer(input: OfferInput) {
     esopUnitsGranted, esopGrantPrice, esopVestingYears, esopCliffYears,
   } = input;
 
-  // Step 1: cash components, taxed
   const grossCashIncome = baseSalary + joiningBonus + annualBonus;
   const cashTaxResult = calculateTakeHome(grossCashIncome);
 
-  // Step 2 & 3: ESOP valuation and tax (only if the offer actually includes ESOPs)
   let esopPostTaxValue = 0;
   let esopDetails = null;
   let stockPriceUsed = null;
 
+  const riskProfile = getCompanyRiskProfile(companyName);
   const hasEsops = esopUnitsGranted && esopUnitsGranted > 0 && esopGrantPrice && tickerSymbol;
 
   if (hasEsops) {
@@ -51,6 +51,7 @@ export async function compareOffer(input: OfferInput) {
         currentStockPrice: stockResult.price,
         vestingYears: esopVestingYears ?? 4,
         cliffYears: esopCliffYears ?? 1,
+        riskHaircut: riskProfile.riskHaircut ?? undefined,
       });
 
       const esopTaxResult = calculateEsopTax({
@@ -65,14 +66,12 @@ export async function compareOffer(input: OfferInput) {
     }
   }
 
-  // Step 4: total real value before location adjustment
   const totalAnnualValue = cashTaxResult.takeHome + esopPostTaxValue;
-
-  // Step 5: cost-of-living adjustment
   const costAdjusted = adjustForCostOfLiving(totalAnnualValue, city);
 
   return {
     companyName,
+    companyRiskProfile: riskProfile,
     city,
     cashBreakdown: cashTaxResult,
     esopBreakdown: esopDetails,
